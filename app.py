@@ -7,7 +7,6 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-import requests
 
 # Configuración global
 st.set_page_config(
@@ -84,7 +83,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Parámetros editables
+# Parámetros editables (valores por defecto)
 Rf = 0.0435   # riesgo libre
 Rm = 0.085    # retorno mercado
 Tc0 = 0.21    # tasa impositiva por defecto
@@ -115,36 +114,62 @@ def safe_first(obj):
         return None
     if hasattr(obj, "dropna"):
         obj = obj.dropna()
-    return obj.iloc[0] if hasattr(obj, "iloc") and not obj.empty else obj
+    try:
+        return obj.iloc[0] if hasattr(obj, "iloc") and not obj.empty else obj
+    except:
+        return None
 
 def seek_row(df, keys):
+    if df is None:
+        return pd.Series([0])
     for k in keys:
         if k in df.index:
             return df.loc[k]
-    return pd.Series([0], index=df.columns[:1])
+    return pd.Series([0])
 
 def format_number(x, decimals=2, is_percent=False):
-    if pd.isna(x):
+    if pd.isna(x) or x is None:
         return "N/D"
-    if is_percent:
-        return f"{x*100:.{decimals}f}%"
-    return f"{x:.{decimals}f}"
+    try:
+        if is_percent:
+            return f"{x*100:.{decimals}f}%"
+        return f"{x:.{decimals}f}"
+    except:
+        return "N/D"
 
 def calc_ke(beta):
+    if beta is None:
+        beta = 1
     return Rf + beta * (Rm - Rf)
 
 def calc_kd(interest, debt):
-    return interest / debt if debt else 0
+    if debt is None or debt == 0:
+        return 0
+    try:
+        return interest / debt
+    except:
+        return 0
 
 def calc_wacc(mcap, debt, ke, kd, t):
-    total = (mcap or 0) + (debt or 0)
-    return (mcap/total)*ke + (debt/total)*kd*(1-t) if total else None
+    if mcap is None:
+        mcap = 0
+    if debt is None:
+        debt = 0
+    total = mcap + debt
+    if total == 0:
+        return None
+    return (mcap/total)*ke + (debt/total)*kd*(1-t)
 
 def cagr4(fin, metric):
-    if metric not in fin.index:
+    if fin is None or metric not in fin.index:
         return None
-    v = fin.loc[metric].dropna().iloc[:4]
-    return (v.iloc[0]/v.iloc[-1])**(1/(len(v)-1))-1 if len(v)>1 and v.iloc[-1] else None
+    try:
+        v = fin.loc[metric].dropna().iloc[:4]
+        if len(v) > 1 and v.iloc[-1] != 0:
+            return (v.iloc[0]/v.iloc[-1])**(1/(len(v)-1))-1
+        return None
+    except:
+        return None
 
 def chunk_df(df, size=MAX_TICKERS_PER_CHART):
     if df.empty:
@@ -153,30 +178,33 @@ def chunk_df(df, size=MAX_TICKERS_PER_CHART):
 
 def auto_ylim(ax, values, pad=0.10):
     """Ajuste automático del eje Y."""
-    if isinstance(values, pd.DataFrame):
-        arr = values.to_numpy(dtype="float64")
-    else:
-        arr = np.asarray(values, dtype="float64")
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return
-    vmin = float(np.nanmin(arr))
-    vmax = float(np.nanmax(arr))
-    if vmax == vmin:
-        ymin = vmin - abs(vmin)*pad - 1
-        ymax = vmax + abs(vmax)*pad + 1
+    try:
+        if isinstance(values, pd.DataFrame):
+            arr = values.to_numpy(dtype="float64")
+        else:
+            arr = np.asarray(values, dtype="float64")
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return
+        vmin = float(np.nanmin(arr))
+        vmax = float(np.nanmax(arr))
+        if vmax == vmin:
+            ymin = vmin - abs(vmin)*pad - 1
+            ymax = vmax + abs(vmax)*pad + 1
+            ax.set_ylim(ymin, ymax)
+            return
+        if vmin >= 0:
+            ymin = 0
+            ymax = vmax * (1 + pad)
+        elif vmax <= 0:
+            ymax = 0
+            ymin = vmin * (1 + pad)
+        else:
+            m = max(abs(vmin), abs(vmax)) * (1 + pad)
+            ymin, ymax = -m, m
         ax.set_ylim(ymin, ymax)
-        return
-    if vmin >= 0:
-        ymin = 0
-        ymax = vmax * (1 + pad)
-    elif vmax <= 0:
-        ymax = 0
-        ymin = vmin * (1 + pad)
-    else:
-        m = max(abs(vmin), abs(vmax)) * (1 + pad)
-        ymin, ymax = -m, m
-    ax.set_ylim(ymin, ymax)
+    except:
+        pass
 
 def obtener_datos_financieros(tk, Tc_def):
     try:
@@ -187,7 +215,7 @@ def obtener_datos_financieros(tk, Tc_def):
         cf = tkr.cashflow
         
         # Datos básicos
-        beta = info.get("beta", 1)
+        beta = info.get("beta", 1.0)
         ke = calc_ke(beta)
         
         debt = safe_first(seek_row(bs, ["Total Debt", "Long Term Debt"])) or info.get("totalDebt", 0)
@@ -195,31 +223,30 @@ def obtener_datos_financieros(tk, Tc_def):
             "Cash And Cash Equivalents",
             "Cash And Cash Equivalents At Carrying Value",
             "Cash Cash Equivalents And Short Term Investments",
-        ]))
-        equity = safe_first(seek_row(bs, ["Common Stock Equity", "Total Stockholder Equity"]))
+        ])) or 0
+        equity = safe_first(seek_row(bs, ["Common Stock Equity", "Total Stockholder Equity"])) or 0
 
-        interest = safe_first(seek_row(fin, ["Interest Expense"]))
-        ebt = safe_first(seek_row(fin, ["Ebt", "EBT"]))
-        tax_exp = safe_first(seek_row(fin, ["Income Tax Expense"]))
-        ebit = safe_first(seek_row(fin, ["EBIT", "Operating Income",
-                                       "Earnings Before Interest and Taxes"]))
+        interest = safe_first(seek_row(fin, ["Interest Expense"])) or 0
+        ebt = safe_first(seek_row(fin, ["Ebt", "EBT"])) or 0
+        tax_exp = safe_first(seek_row(fin, ["Income Tax Expense"])) or 0
+        ebit = safe_first(seek_row(fin, ["EBIT", "Operating Income", "Earnings Before Interest and Taxes"])) or 0
 
         kd = calc_kd(interest, debt)
-        tax = tax_exp / ebt if ebt else Tc_def
+        tax = tax_exp / ebt if ebt and ebt != 0 else Tc_def
         mcap = info.get("marketCap", 0)
         wacc = calc_wacc(mcap, debt, ke, kd, tax)
 
         nopat = ebit * (1 - tax) if ebit is not None else None
         invested = (equity or 0) + ((debt or 0) - (cash or 0))
-        roic = nopat / invested if (nopat is not None and invested) else None
+        roic = nopat / invested if (nopat is not None and invested and invested != 0) else None
         
-        # CALCULAR CREACIÓN DE VALOR (WACC vs ROIC) en lugar de EVA
-        creacion_valor = (roic - wacc) * 100 if all(v is not None for v in (roic, wacc)) else None
+        # CALCULAR CREACIÓN DE VALOR (WACC vs ROIC)
+        creacion_valor = (roic - wacc) * 100 if (roic is not None and wacc is not None) else None
 
-        price = info.get("currentPrice")
-        fcf = safe_first(seek_row(cf, ["Free Cash Flow"]))
-        shares = info.get("sharesOutstanding")
-        pfcf = price / (fcf/shares) if (fcf and shares) else None
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        fcf = safe_first(seek_row(cf, ["Free Cash Flow"])) or 0
+        shares = info.get("sharesOutstanding") or info.get("sharesOutstanding") or 1
+        pfcf = price / (fcf/shares) if (fcf and shares and fcf != 0) else None
 
         # Cálculo de ratios
         current_ratio = info.get("currentRatio")
@@ -271,7 +298,6 @@ def obtener_datos_financieros(tk, Tc_def):
     except Exception as e:
         # Manejar específicamente el error de rate limiting
         if "Too Many Requests" in str(e) or "rate" in str(e).lower():
-            st.warning(f"Rate limit alcanzado para {tk}. Reintentando después de pausa...")
             time.sleep(2)  # Pausa más larga para rate limiting
             # Reintentar una vez más después de la pausa
             try:
@@ -319,10 +345,16 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
+        # Usar variables globales
         global Rf, Rm, Tc0
-        Rf = st.number_input("**Tasa libre de riesgo (%)**", 0.0, 20.0, 4.35)/100
-        Rm = st.number_input("**Retorno esperado del mercado (%)**", 0.0, 30.0, 8.5)/100
-        Tc0 = st.number_input("**Tasa impositiva corporativa (%)**", 0.0, 50.0, 21.0)/100
+        Rf_val = st.number_input("**Tasa libre de riesgo (%)**", 0.0, 20.0, 4.35)
+        Rm_val = st.number_input("**Retorno esperado del mercado (%)**", 0.0, 30.0, 8.5)
+        Tc0_val = st.number_input("**Tasa impositiva corporativa (%)**", 0.0, 50.0, 21.0)
+        
+        # Actualizar variables globales
+        Rf = Rf_val / 100
+        Rm = Rm_val / 100
+        Tc0 = Tc0_val / 100
 
     # Botón de análisis con diseño mejorado
     if st.button("🔍 Analizar Acciones", type="primary"):
@@ -380,8 +412,8 @@ def main():
         )
             
         # Precio y MarketCap con 2 decimales
-        df_disp["Precio"] = df_disp["Precio"].apply(lambda x: f"${float(x):,.2f}" if pd.notnull(x) else "N/D")
-        df_disp["MarketCap"] = df_disp["MarketCap"].apply(lambda x: f"${float(x)/1e9:,.2f}B" if pd.notnull(x) else "N/D")
+        df_disp["Precio"] = df_disp["Precio"].apply(lambda x: f"${float(x):,.2f}" if pd.notnull(x) and x != 0 else "N/D")
+        df_disp["MarketCap"] = df_disp["MarketCap"].apply(lambda x: f"${float(x)/1e9:,.2f}B" if pd.notnull(x) and x != 0 else "N/D")
         
         # Asegurar que las columnas de texto no sean None
         for c in ["Nombre", "País", "Industria"]:
@@ -504,7 +536,7 @@ def main():
                     with c1:
                         st.caption("Apalancamiento")
                         fig, ax = plt.subplots(figsize=(10, 5))
-                        lev = chunk[["Ticker", "Debt/Eq", "LtDebt/Eq"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
+                        lev = chunk[["Ticker", "Debt/Eq", "LtDebbt/Eq"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
                         lev.plot(kind="bar", stacked=True, ax=ax, rot=45)
                         ax.axhline(1, color="red", linestyle="--")
                         ax.set_ylabel("Ratio")
@@ -582,7 +614,8 @@ def main():
             st.metric("WACC", det_disp["WACC"])
             
             # Determinar clase CSS según creación de valor
-            valor_class = "positive-value" if det_raw.get("Creacion Valor (Wacc vs Roic)", 0) > 0 else "negative-value"
+            valor_creacion = det_raw.get("Creacion Valor (Wacc vs Roic)", 0) or 0
+            valor_class = "positive-value" if valor_creacion > 0 else "negative-value"
             valor_text = f'<span class="{valor_class}">{det_disp["Creacion Valor (Wacc vs Roic)"]}</span>'
             st.markdown(f"""
             <div style="margin-top: 1rem;">
