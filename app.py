@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-#  📊 DASHBOARD FINANCIERO AVANZADO - DISEÑO MEJORADO
+#  📊 DASHBOARD FINANCIERO AVANZADO - INTERFAZ MEJORADA
 # -------------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -7,6 +7,8 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
 import time
+import requests
+from matplotlib.colors import LinearSegmentedColormap
 
 # Configuración global
 st.set_page_config(
@@ -16,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Aplicar estilos CSS personalizados
+# Estilos CSS personalizados
 st.markdown("""
 <style>
     .main-header {
@@ -29,41 +31,18 @@ st.markdown("""
         font-size: 1.5rem;
         color: #0D47A1;
         font-weight: 600;
-        margin-bottom: 1rem;
-        padding-bottom: 0.3rem;
         border-bottom: 2px solid #64B5F6;
+        padding-bottom: 0.3rem;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
     }
     .metric-card {
-        background-color: #E3F2FD;
+        background-color: #f8f9fa;
         padding: 1rem;
         border-radius: 0.5rem;
-        border-left: 4px solid #2196F3;
-        margin-bottom: 1rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .stButton button {
-        background-color: #1976D2;
-        color: white;
-        font-weight: 600;
-        border-radius: 0.5rem;
-        padding: 0.5rem 1rem;
-        border: none;
-        width: 100%;
-    }
-    .stButton button:hover {
-        background-color: #0D47A1;
-        color: white;
-    }
-    .sidebar .sidebar-content {
-        background-color: #f0f2f6;
-    }
-    .ticker-card {
-        background-color: #FFFFFF;
-        padding: 1rem;
-        border-radius: 0.5rem;
+        border-left: 4px solid #1E88E5;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         margin-bottom: 1rem;
-        border-left: 4px solid #2196F3;
     }
     .positive-value {
         color: #2E7D32;
@@ -73,17 +52,43 @@ st.markdown("""
         color: #C62828;
         font-weight: 600;
     }
-    .info-text {
+    .sector-badge {
+        padding: 0.3rem 0.8rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+        font-weight: 500;
         background-color: #E3F2FD;
-        padding: 1rem;
+        color: #1565C0;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #E3F2FD;
+        border-radius: 8px 8px 0px 0px;
+        gap: 8px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1E88E5;
+        color: white;
+    }
+    .company-card {
+        background-color: white;
+        padding: 1.5rem;
         border-radius: 0.5rem;
-        margin-bottom: 1rem;
-        border-left: 4px solid #2196F3;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 1.5rem;
+        border: 1px solid #E0E0E0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Parámetros editables (valores por defecto)
+# Parámetros editables
 Rf = 0.0435   # riesgo libre
 Rm = 0.085    # retorno mercado
 Tc0 = 0.21    # tasa impositiva por defecto
@@ -104,6 +109,22 @@ SECTOR_RANK = {
     "Unknown": 99,
 }
 
+# Paleta de colores para sectores
+SECTOR_COLORS = {
+    "Consumer Defensive": "#FF6B6B",
+    "Consumer Cyclical": "#4ECDC4",
+    "Healthcare": "#45B7D1",
+    "Technology": "#96CEB4",
+    "Financial Services": "#FFEAA7",
+    "Industrials": "#DDA0DD",
+    "Communication Services": "#98D8C8",
+    "Energy": "#F7DC6F",
+    "Real Estate": "#BB8FCE",
+    "Utilities": "#85C1E9",
+    "Basic Materials": "#F8C471",
+    "Unknown": "#CCCCCC"
+}
+
 MAX_TICKERS_PER_CHART = 10
 
 # =============================================================
@@ -114,62 +135,36 @@ def safe_first(obj):
         return None
     if hasattr(obj, "dropna"):
         obj = obj.dropna()
-    try:
-        return obj.iloc[0] if hasattr(obj, "iloc") and not obj.empty else obj
-    except:
-        return None
+    return obj.iloc[0] if hasattr(obj, "iloc") and not obj.empty else obj
 
 def seek_row(df, keys):
-    if df is None:
-        return pd.Series([0])
     for k in keys:
         if k in df.index:
             return df.loc[k]
-    return pd.Series([0])
+    return pd.Series([0], index=df.columns[:1])
 
 def format_number(x, decimals=2, is_percent=False):
-    if pd.isna(x) or x is None:
+    if pd.isna(x):
         return "N/D"
-    try:
-        if is_percent:
-            return f"{x*100:.{decimals}f}%"
-        return f"{x:.{decimals}f}"
-    except:
-        return "N/D"
+    if is_percent:
+        return f"{x*100:.{decimals}f}%"
+    return f"{x:.{decimals}f}"
 
 def calc_ke(beta):
-    if beta is None:
-        beta = 1
     return Rf + beta * (Rm - Rf)
 
 def calc_kd(interest, debt):
-    if debt is None or debt == 0:
-        return 0
-    try:
-        return interest / debt
-    except:
-        return 0
+    return interest / debt if debt else 0
 
 def calc_wacc(mcap, debt, ke, kd, t):
-    if mcap is None:
-        mcap = 0
-    if debt is None:
-        debt = 0
-    total = mcap + debt
-    if total == 0:
-        return None
-    return (mcap/total)*ke + (debt/total)*kd*(1-t)
+    total = (mcap or 0) + (debt or 0)
+    return (mcap/total)*ke + (debt/total)*kd*(1-t) if total else None
 
 def cagr4(fin, metric):
-    if fin is None or metric not in fin.index:
+    if metric not in fin.index:
         return None
-    try:
-        v = fin.loc[metric].dropna().iloc[:4]
-        if len(v) > 1 and v.iloc[-1] != 0:
-            return (v.iloc[0]/v.iloc[-1])**(1/(len(v)-1))-1
-        return None
-    except:
-        return None
+    v = fin.loc[metric].dropna().iloc[:4]
+    return (v.iloc[0]/v.iloc[-1])**(1/(len(v)-1))-1 if len(v)>1 and v.iloc[-1] else None
 
 def chunk_df(df, size=MAX_TICKERS_PER_CHART):
     if df.empty:
@@ -178,33 +173,30 @@ def chunk_df(df, size=MAX_TICKERS_PER_CHART):
 
 def auto_ylim(ax, values, pad=0.10):
     """Ajuste automático del eje Y."""
-    try:
-        if isinstance(values, pd.DataFrame):
-            arr = values.to_numpy(dtype="float64")
-        else:
-            arr = np.asarray(values, dtype="float64")
-        arr = arr[np.isfinite(arr)]
-        if arr.size == 0:
-            return
-        vmin = float(np.nanmin(arr))
-        vmax = float(np.nanmax(arr))
-        if vmax == vmin:
-            ymin = vmin - abs(vmin)*pad - 1
-            ymax = vmax + abs(vmax)*pad + 1
-            ax.set_ylim(ymin, ymax)
-            return
-        if vmin >= 0:
-            ymin = 0
-            ymax = vmax * (1 + pad)
-        elif vmax <= 0:
-            ymax = 0
-            ymin = vmin * (1 + pad)
-        else:
-            m = max(abs(vmin), abs(vmax)) * (1 + pad)
-            ymin, ymax = -m, m
+    if isinstance(values, pd.DataFrame):
+        arr = values.to_numpy(dtype="float64")
+    else:
+        arr = np.asarray(values, dtype="float64")
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return
+    vmin = float(np.nanmin(arr))
+    vmax = float(np.nanmax(arr))
+    if vmax == vmin:
+        ymin = vmin - abs(vmin)*pad - 1
+        ymax = vmax + abs(vmax)*pad + 1
         ax.set_ylim(ymin, ymax)
-    except:
-        pass
+        return
+    if vmin >= 0:
+        ymin = 0
+        ymax = vmax * (1 + pad)
+    elif vmax <= 0:
+        ymax = 0
+        ymin = vmin * (1 + pad)
+    else:
+        m = max(abs(vmin), abs(vmax)) * (1 + pad)
+        ymin, ymax = -m, m
+    ax.set_ylim(ymin, ymax)
 
 def obtener_datos_financieros(tk, Tc_def):
     try:
@@ -215,7 +207,7 @@ def obtener_datos_financieros(tk, Tc_def):
         cf = tkr.cashflow
         
         # Datos básicos
-        beta = info.get("beta", 1.0)
+        beta = info.get("beta", 1)
         ke = calc_ke(beta)
         
         debt = safe_first(seek_row(bs, ["Total Debt", "Long Term Debt"])) or info.get("totalDebt", 0)
@@ -223,30 +215,31 @@ def obtener_datos_financieros(tk, Tc_def):
             "Cash And Cash Equivalents",
             "Cash And Cash Equivalents At Carrying Value",
             "Cash Cash Equivalents And Short Term Investments",
-        ])) or 0
-        equity = safe_first(seek_row(bs, ["Common Stock Equity", "Total Stockholder Equity"])) or 0
+        ]))
+        equity = safe_first(seek_row(bs, ["Common Stock Equity", "Total Stockholder Equity"]))
 
-        interest = safe_first(seek_row(fin, ["Interest Expense"])) or 0
-        ebt = safe_first(seek_row(fin, ["Ebt", "EBT"])) or 0
-        tax_exp = safe_first(seek_row(fin, ["Income Tax Expense"])) or 0
-        ebit = safe_first(seek_row(fin, ["EBIT", "Operating Income", "Earnings Before Interest and Taxes"])) or 0
+        interest = safe_first(seek_row(fin, ["Interest Expense"]))
+        ebt = safe_first(seek_row(fin, ["Ebt", "EBT"]))
+        tax_exp = safe_first(seek_row(fin, ["Income Tax Expense"]))
+        ebit = safe_first(seek_row(fin, ["EBIT", "Operating Income",
+                                       "Earnings Before Interest and Taxes"]))
 
         kd = calc_kd(interest, debt)
-        tax = tax_exp / ebt if ebt and ebt != 0 else Tc_def
+        tax = tax_exp / ebt if ebt else Tc_def
         mcap = info.get("marketCap", 0)
         wacc = calc_wacc(mcap, debt, ke, kd, tax)
 
         nopat = ebit * (1 - tax) if ebit is not None else None
         invested = (equity or 0) + ((debt or 0) - (cash or 0))
-        roic = nopat / invested if (nopat is not None and invested and invested != 0) else None
+        roic = nopat / invested if (nopat is not None and invested) else None
         
-        # CALCULAR CREACIÓN DE VALOR (WACC vs ROIC)
-        creacion_valor = (roic - wacc) * 100 if (roic is not None and wacc is not None) else None
+        # CALCULAR CREACIÓN DE VALOR (WACC vs ROIC) en lugar de EVA
+        creacion_valor = (roic - wacc) * 100 if all(v is not None for v in (roic, wacc)) else None
 
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        fcf = safe_first(seek_row(cf, ["Free Cash Flow"])) or 0
-        shares = info.get("sharesOutstanding") or info.get("sharesOutstanding") or 1
-        pfcf = price / (fcf/shares) if (fcf and shares and fcf != 0) else None
+        price = info.get("currentPrice")
+        fcf = safe_first(seek_row(cf, ["Free Cash Flow"]))
+        shares = info.get("sharesOutstanding")
+        pfcf = price / (fcf/shares) if (fcf and shares) else None
 
         # Cálculo de ratios
         current_ratio = info.get("currentRatio")
@@ -298,6 +291,7 @@ def obtener_datos_financieros(tk, Tc_def):
     except Exception as e:
         # Manejar específicamente el error de rate limiting
         if "Too Many Requests" in str(e) or "rate" in str(e).lower():
+            st.warning(f"Rate limit alcanzado para {tk}. Reintentando después de pausa...")
             time.sleep(2)  # Pausa más larga para rate limiting
             # Reintentar una vez más después de la pausa
             try:
@@ -314,23 +308,20 @@ def obtener_datos_financieros(tk, Tc_def):
 # INTERFAZ PRINCIPAL
 # =============================================================
 def main():
-    # Encabezado principal con diseño mejorado
-    st.markdown('<h1 class="main-header">📊 Dashboard de Análisis Financiero Avanzado</h1>', unsafe_allow_html=True)
+    # Encabezado principal
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown('<h1 class="main-header">📊 Dashboard de Análisis Financiero Avanzado</h1>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div style="text-align: right; padding-top: 1rem;"><small>Powered by Yahoo Finance</small></div>', unsafe_allow_html=True)
     
-    # Información destacada
-    st.markdown("""
-    <div class="info-text">
-        <h3>💡 Supermercado de Inversiones</h3>
-        <p>Analizá más de 150 alternativas de inversión con tu cuenta comitente. 
-        Nuestra plataforma te ofrece herramientas avanzadas para tomar decisiones informadas.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("Analiza y compara múltiples empresas utilizando métricas financieras clave para la toma de decisiones de inversión.")
 
-    # Sidebar con diseño mejorado
+    # Sidebar
     with st.sidebar:
         st.markdown("""
-        <div style="background-color: #1976D2; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">
-            <h2 style="color: white; margin: 0;">⚙️ Configuración</h2>
+        <div style='background-color: #1E88E5; padding: 1rem; border-radius: 0.5rem; color: white; margin-bottom: 1.5rem;'>
+            <h3 style='color: white; margin: 0;'>⚙️ Configuración</h3>
         </div>
         """, unsafe_allow_html=True)
         
@@ -339,25 +330,20 @@ def main():
         max_t = st.slider("**Máximo de tickers**", 1, 50, 12)
         
         st.markdown("---")
+        st.markdown("**📈 Parámetros WACC**")
+        global Rf, Rm, Tc0
+        Rf = st.number_input("Tasa libre de riesgo (%)", 0.0, 20.0, 4.35)/100
+        Rm = st.number_input("Retorno esperado del mercado (%)", 0.0, 30.0, 8.5)/100
+        Tc0 = st.number_input("Tasa impositiva corporativa (%)", 0.0, 50.0, 21.0)/100
+        
+        st.markdown("---")
         st.markdown("""
-        <div style="background-color: #E3F2FD; padding: 0.5rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-            <h3 style="color: #0D47A1; margin: 0;">📈 Parámetros WACC</h3>
+        <div style='text-align: center; font-size: 0.8rem; color: #666;'>
+            Desarrollado con Streamlit<br>Datos proporcionados por Yahoo Finance
         </div>
         """, unsafe_allow_html=True)
-        
-        # Usar variables globales
-        global Rf, Rm, Tc0
-        Rf_val = st.number_input("**Tasa libre de riesgo (%)**", 0.0, 20.0, 4.35)
-        Rm_val = st.number_input("**Retorno esperado del mercado (%)**", 0.0, 30.0, 8.5)
-        Tc0_val = st.number_input("**Tasa impositiva corporativa (%)**", 0.0, 50.0, 21.0)
-        
-        # Actualizar variables globales
-        Rf = Rf_val / 100
-        Rm = Rm_val / 100
-        Tc0 = Tc0_val / 100
 
-    # Botón de análisis con diseño mejorado
-    if st.button("🔍 Analizar Acciones", type="primary"):
+    if st.button("🔍 Analizar Acciones", type="primary", use_container_width=True):
         tickers = [t.strip().upper() for t in t_in.split(",") if t.strip()][:max_t]
         
         # Obtener datos
@@ -412,8 +398,8 @@ def main():
         )
             
         # Precio y MarketCap con 2 decimales
-        df_disp["Precio"] = df_disp["Precio"].apply(lambda x: f"${float(x):,.2f}" if pd.notnull(x) and x != 0 else "N/D")
-        df_disp["MarketCap"] = df_disp["MarketCap"].apply(lambda x: f"${float(x)/1e9:,.2f}B" if pd.notnull(x) and x != 0 else "N/D")
+        df_disp["Precio"] = df_disp["Precio"].apply(lambda x: f"${float(x):,.2f}" if pd.notnull(x) else "N/D")
+        df_disp["MarketCap"] = df_disp["MarketCap"].apply(lambda x: f"${float(x)/1e9:,.2f}B" if pd.notnull(x) else "N/D")
         
         # Asegurar que las columnas de texto no sean None
         for c in ["Nombre", "País", "Industria"]:
@@ -422,23 +408,73 @@ def main():
         # =====================================================
         # SECCIÓN 1: RESUMEN GENERAL
         # =====================================================
-        st.markdown('<h2 class="sub-header">📋 Resumen General (agrupado por Sector)</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="sub-header">📋 Resumen General</h2>', unsafe_allow_html=True)
+        
+        # Mostrar estadísticas generales
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3>{len(df)}</h3>
+                <p>Empresas analizadas</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            sectors_count = df['Sector'].nunique()
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3>{sectors_count}</h3>
+                <p>Sectores representados</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col3:
+            avg_pe = df['P/E'].mean()
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3>{format_number(avg_pe, 1) if not pd.isna(avg_pe) else 'N/D'}</h3>
+                <p>P/E Promedio</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col4:
+            avg_roe = df['ROE'].mean() * 100 if not df['ROE'].isna().all() else None
+            roe_class = "positive-value" if avg_roe and avg_roe > 10 else "negative-value" if avg_roe else ""
+            roe_display = f"{avg_roe:.1f}%" if avg_roe else "N/D"
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3 class="{roe_class}">{roe_display}</h3>
+                <p>ROE Promedio</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         # Mostrar tabla
         st.dataframe(
             df_disp[[
-                "Ticker", "Nombre", "País", "Industria", "Sector",
-                "Precio", "P/E", "P/B", "P/FCF",
-                "Dividend Yield %", "Payout Ratio", "ROA", "ROE",
-                "Current Ratio", "Debt/Eq", "Oper Margin", "Profit Margin",
-                "WACC", "ROIC", "Creacion Valor (Wacc vs Roic)", "MarketCap"
+                "Ticker", "Nombre", "Sector", "Precio", "P/E", "P/B", "P/FCF",
+                "Dividend Yield %", "ROE", "ROIC", "Creacion Valor (Wacc vs Roic)", "MarketCap"
             ]],
             use_container_width=True,
-            height=500
+            height=400,
+            column_config={
+                "Ticker": "Ticker",
+                "Nombre": "Nombre",
+                "Sector": st.column_config.TextColumn("Sector", width="medium"),
+                "Precio": "Precio",
+                "P/E": "P/E",
+                "P/B": "P/B",
+                "P/FCF": "P/FCF",
+                "Dividend Yield %": "Div Yield",
+                "ROE": "ROE",
+                "ROIC": "ROIC",
+                "Creacion Valor (Wacc vs Roic)": "Creación Valor",
+                "MarketCap": "Market Cap"
+            }
         )
 
         if errs:
-            st.markdown('<h3 class="sub-header">🚫 Tickers con error</h3>', unsafe_allow_html=True)
+            st.error("Algunos tickers no pudieron ser procesados:")
             st.table(pd.DataFrame(errs))
 
         sectors_ordered = df["Sector"].unique()
@@ -446,18 +482,20 @@ def main():
         # =====================================================
         # SECCIÓN 2: ANÁLISIS DE VALORACIÓN
         # =====================================================
-        st.markdown('<h2 class="sub-header">💰 Análisis de Valoración (por Sector)</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="sub-header">💰 Análisis de Valoración</h2>', unsafe_allow_html=True)
         
         for sec in sectors_ordered:
             sec_df = df[df["Sector"] == sec]
             if sec_df.empty:
                 continue
                 
-            with st.expander(f"Sector: {sec} ({len(sec_df)} empresas)", expanded=False):
-                fig, ax = plt.subplots(figsize=(10, 4))
+            with st.expander(f"{sec} ({len(sec_df)} empresas)", expanded=False):
+                fig, ax = plt.subplots(figsize=(10, 5))
                 val = sec_df[["Ticker", "P/E", "P/B", "P/FCF"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
-                val.plot(kind="bar", ax=ax, rot=45)
+                val.plot(kind="bar", ax=ax, rot=45, color=['#1E88E5', '#64B5F6', '#90CAF9'])
                 ax.set_ylabel("Ratio")
+                ax.set_title(f"Múltiplos de Valoración - Sector {sec}")
+                ax.grid(axis='y', linestyle='--', alpha=0.7)
                 auto_ylim(ax, val)
                 st.pyplot(fig)
                 plt.close()
@@ -481,8 +519,10 @@ def main():
                         "ROE": (sec_df["ROE"]*100).values,
                         "ROA": (sec_df["ROA"]*100).values
                     }, index=sec_df["Ticker"])
-                    rr.plot(kind="bar", ax=ax, rot=45)
+                    rr.plot(kind="bar", ax=ax, rot=45, color=['#2E7D32', '#66BB6A'])
                     ax.set_ylabel("%")
+                    ax.set_title(f"ROE vs ROA - Sector {sec}")
+                    ax.grid(axis='y', linestyle='--', alpha=0.7)
                     auto_ylim(ax, rr)
                     st.pyplot(fig)
                     plt.close()
@@ -499,8 +539,10 @@ def main():
                         "Oper Margin": (sec_df["Oper Margin"]*100).values,
                         "Profit Margin": (sec_df["Profit Margin"]*100).values
                     }, index=sec_df["Ticker"])
-                    mm.plot(kind="bar", ax=ax, rot=45)
+                    mm.plot(kind="bar", ax=ax, rot=45, color=['#FF9800', '#FFB74D'])
                     ax.set_ylabel("%")
+                    ax.set_title(f"Márgenes Operativos - Sector {sec}")
+                    ax.grid(axis='y', linestyle='--', alpha=0.7)
                     auto_ylim(ax, mm)
                     st.pyplot(fig)
                     plt.close()
@@ -511,9 +553,10 @@ def main():
                 "ROIC": (df["ROIC"]*100).values,
                 "WACC": (df["WACC"]*100).values
             }, index=df["Ticker"])
-            rw.plot(kind="bar", ax=ax, rot=45)
+            rw.plot(kind="bar", ax=ax, rot=45, color=['#2E7D32', '#C62828'])
             ax.set_ylabel("%")
             ax.set_title("Creación de Valor: ROIC vs WACC")
+            ax.grid(axis='y', linestyle='--', alpha=0.7)
             auto_ylim(ax, rw)
             st.pyplot(fig)
             plt.close()
@@ -521,7 +564,7 @@ def main():
         # =====================================================
         # SECCIÓN 4: ESTRUCTURA DE CAPITAL Y LIQUIDEZ
         # =====================================================
-        st.markdown('<h2 class="sub-header">🏦 Estructura de Capital y Liquidez (por sector)</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="sub-header">🏦 Estructura de Capital y Liquidez</h2>', unsafe_allow_html=True)
         
         for sec in sectors_ordered:
             sec_df = df[df["Sector"] == sec]
@@ -534,23 +577,27 @@ def main():
                     c1, c2 = st.columns(2)
                     
                     with c1:
-                        st.caption("Apalancamiento")
+                        st.markdown("**Apalancamiento**")
                         fig, ax = plt.subplots(figsize=(10, 5))
-                        lev = chunk[["Ticker", "Debt/Eq", "LtDebbt/Eq"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
-                        lev.plot(kind="bar", stacked=True, ax=ax, rot=45)
-                        ax.axhline(1, color="red", linestyle="--")
+                        lev = chunk[["Ticker", "Debt/Eq", "LtDebt/Eq"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
+                        lev.plot(kind="bar", stacked=True, ax=ax, rot=45, color=['#5C6BC0', '#9FA8DA'])
+                        ax.axhline(1, color="red", linestyle="--", alpha=0.7)
                         ax.set_ylabel("Ratio")
+                        ax.set_title("Deuda/Patrimonio")
+                        ax.grid(axis='y', linestyle='--', alpha=0.7)
                         auto_ylim(ax, lev)
                         st.pyplot(fig)
                         plt.close()
                         
                     with c2:
-                        st.caption("Liquidez")
+                        st.markdown("**Liquidez**")
                         fig, ax = plt.subplots(figsize=(10, 5))
                         liq = chunk[["Ticker", "Current Ratio", "Quick Ratio"]].set_index("Ticker").apply(pd.to_numeric, errors="coerce")
-                        liq.plot(kind="bar", ax=ax, rot=45)
-                        ax.axhline(1, color="green", linestyle="--")
+                        liq.plot(kind="bar", ax=ax, rot=45, color=['#26A69A', '#80CBC4'])
+                        ax.axhline(1, color="green", linestyle="--", alpha=0.7)
                         ax.set_ylabel("Ratio")
+                        ax.set_title("Ratios de Liquidez")
+                        ax.grid(axis='y', linestyle='--', alpha=0.7)
                         auto_ylim(ax, liq)
                         st.pyplot(fig)
                         plt.close()
@@ -558,7 +605,7 @@ def main():
         # =====================================================
         # SECCIÓN 5: CRECIMIENTO
         # =====================================================
-        st.markdown('<h2 class="sub-header">🚀 Crecimiento (CAGR 3-4 años, por sector)</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="sub-header">🚀 Crecimiento (CAGR 3-4 años)</h2>', unsafe_allow_html=True)
         
         for sec in sectors_ordered:
             sec_df = df[df["Sector"] == sec]
@@ -574,9 +621,11 @@ def main():
                         "EPS Growth": (chunk["EPS Growth"]*100).values,
                         "FCF Growth": (chunk["FCF Growth"]*100).values
                     }, index=chunk["Ticker"])
-                    gdf.plot(kind="bar", ax=ax, rot=45)
+                    gdf.plot(kind="bar", ax=ax, rot=45, color=['#AB47BC', '#7E57C2', '#5C6BC0'])
                     ax.axhline(0, color="black", linewidth=0.8)
                     ax.set_ylabel("%")
+                    ax.set_title(f"Tasas de Crecimiento Anual - Sector {sec}")
+                    ax.grid(axis='y', linestyle='--', alpha=0.7)
                     auto_ylim(ax, gdf)
                     st.pyplot(fig)
                     plt.close()
@@ -590,69 +639,64 @@ def main():
         det_raw = df[df["Ticker"] == pick].iloc[0]
 
         st.markdown(f"""
-        <div class="ticker-card">
+        <div class="company-card">
             <h3>{det_raw['Nombre']}</h3>
-            <p><strong>Sector:</strong> {det_raw['Sector']}</p>
-            <p><strong>País:</strong> {det_raw['País']}</p>
-            <p><strong>Industria:</strong> {det_raw['Industria']}</p>
+            <p><strong>Sector:</strong> <span class="sector-badge">{det_raw['Sector']}</span></p>
+            <p><strong>País:</strong> {det_raw['País']} | <strong>Industria:</strong> {det_raw['Industria']}</p>
         </div>
         """, unsafe_allow_html=True)
 
         cA, cB, cC = st.columns(3)
         with cA:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.markdown("**💵 Valoración**")
             st.metric("Precio", det_disp["Precio"])
             st.metric("P/E", det_disp["P/E"])
             st.metric("P/B", det_disp["P/B"])
             st.metric("P/FCF", det_disp["P/FCF"])
-            st.markdown('</div>', unsafe_allow_html=True)
             
         with cB:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.markdown("**📊 Rentabilidad**")
             st.metric("Market Cap", det_disp["MarketCap"])
             st.metric("ROIC", det_disp["ROIC"])
             st.metric("WACC", det_disp["WACC"])
             
-            # Determinar clase CSS según creación de valor
-            valor_creacion = det_raw.get("Creacion Valor (Wacc vs Roic)", 0) or 0
-            valor_class = "positive-value" if valor_creacion > 0 else "negative-value"
-            valor_text = f'<span class="{valor_class}">{det_disp["Creacion Valor (Wacc vs Roic)"]}</span>'
-            st.markdown(f"""
-            <div style="margin-top: 1rem;">
-                <label style="font-weight: 600;">Creación Valor</label>
-                <div style="font-size: 1.5rem; margin-top: 0.5rem;">{valor_text}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Determinar clase CSS para creación de valor
+            valor_class = "positive-value" if det_raw.get("Creacion Valor (Wacc vs Roic)", 0) > 0 else "negative-value"
+            st.metric("Creación Valor", det_disp["Creacion Valor (Wacc vs Roic)"], delta=None)
             
         with cC:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.markdown("**📈 Fundamentales**")
             st.metric("ROE", det_disp["ROE"])
             st.metric("Dividend Yield", det_disp["Dividend Yield %"])
             st.metric("Current Ratio", det_disp["Current Ratio"])
             st.metric("Debt/Eq", det_disp["Debt/Eq"])
-            st.markdown('</div>', unsafe_allow_html=True)
 
         st.subheader("ROIC vs WACC")
         if pd.notnull(det_raw["ROIC"]) and pd.notnull(det_raw["WACC"]):
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(6, 5))
             comp = pd.DataFrame({
                 "ROIC": [det_raw["ROIC"]*100],
                 "WACC": [det_raw["WACC"]*100]
             }, index=[pick])
-            comp.plot(kind="bar", ax=ax, rot=0, legend=False, 
-                     color=["green" if det_raw["ROIC"] > det_raw["WACC"] else "red", "gray"])
+            colors = ["green" if det_raw["ROIC"] > det_raw["WACC"] else "red", "gray"]
+            comp.plot(kind="bar", ax=ax, rot=0, legend=False, color=colors)
             ax.set_ylabel("%")
+            ax.set_title("ROIC vs WACC - Creación de Valor")
+            ax.grid(axis='y', linestyle='--', alpha=0.7)
             auto_ylim(ax, comp)
             st.pyplot(fig)
             plt.close()
             
             if det_raw["ROIC"] > det_raw["WACC"]:
-                st.success("✅ Crea valor (ROIC > WACC)")
+                st.success("✅ **Crea valor** (ROIC > WACC)")
             else:
-                st.error("❌ Destruye valor (ROIC < WACC)")
+                st.error("❌ **Destruye valor** (ROIC < WACC)")
         else:
             st.warning("Datos insuficientes para comparar ROIC/WACC")
+
+    else:
+        # Estado inicial antes de hacer clic en el botón
+        st.info("👈 Ingresa los tickers en el panel lateral y haz clic en 'Analizar Acciones' para comenzar.")
 
 if __name__ == "__main__":
     main()
