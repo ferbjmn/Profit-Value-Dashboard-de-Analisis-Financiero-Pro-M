@@ -7,8 +7,6 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-import requests
-from matplotlib.colors import LinearSegmentedColormap
 
 # Configuración global
 st.set_page_config(
@@ -22,7 +20,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         color: #1E88E5;
         font-weight: 700;
         margin-bottom: 0.5rem;
@@ -60,31 +58,6 @@ st.markdown("""
         background-color: #E3F2FD;
         color: #1565C0;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #E3F2FD;
-        border-radius: 8px 8px 0px 0px;
-        gap: 8px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1E88E5;
-        color: white;
-    }
-    .company-card {
-        background-color: white;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        margin-bottom: 1.5rem;
-        border: 1px solid #E0E0E0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -109,22 +82,6 @@ SECTOR_RANK = {
     "Unknown": 99,
 }
 
-# Paleta de colores para sectores
-SECTOR_COLORS = {
-    "Consumer Defensive": "#FF6B6B",
-    "Consumer Cyclical": "#4ECDC4",
-    "Healthcare": "#45B7D1",
-    "Technology": "#96CEB4",
-    "Financial Services": "#FFEAA7",
-    "Industrials": "#DDA0DD",
-    "Communication Services": "#98D8C8",
-    "Energy": "#F7DC6F",
-    "Real Estate": "#BB8FCE",
-    "Utilities": "#85C1E9",
-    "Basic Materials": "#F8C471",
-    "Unknown": "#CCCCCC"
-}
-
 MAX_TICKERS_PER_CHART = 10
 
 # =============================================================
@@ -144,7 +101,7 @@ def seek_row(df, keys):
     return pd.Series([0], index=df.columns[:1])
 
 def format_number(x, decimals=2, is_percent=False):
-    if pd.isna(x):
+    if pd.isna(x) or x is None:
         return "N/D"
     if is_percent:
         return f"{x*100:.{decimals}f}%"
@@ -161,7 +118,7 @@ def calc_wacc(mcap, debt, ke, kd, t):
     return (mcap/total)*ke + (debt/total)*kd*(1-t) if total else None
 
 def cagr4(fin, metric):
-    if metric not in fin.index:
+    if fin is None or metric not in fin.index:
         return None
     v = fin.loc[metric].dropna().iloc[:4]
     return (v.iloc[0]/v.iloc[-1])**(1/(len(v)-1))-1 if len(v)>1 and v.iloc[-1] else None
@@ -326,7 +283,7 @@ def main():
         """, unsafe_allow_html=True)
         
         t_in = st.text_area("**Tickers** (separados por comas)", 
-                          "HRL, AAPL, MSFT, ABT, O, XOM, KO, JNJ, CLX, CHD, CB, DDOG")
+                          "AAPL, MSFT, GOOGL, AMZN, TSLA")
         max_t = st.slider("**Máximo de tickers**", 1, 50, 12)
         
         st.markdown("---")
@@ -456,21 +413,7 @@ def main():
                 "Dividend Yield %", "ROE", "ROIC", "Creacion Valor (Wacc vs Roic)", "MarketCap"
             ]],
             use_container_width=True,
-            height=400,
-            column_config={
-                "Ticker": "Ticker",
-                "Nombre": "Nombre",
-                "Sector": st.column_config.TextColumn("Sector", width="medium"),
-                "Precio": "Precio",
-                "P/E": "P/E",
-                "P/B": "P/B",
-                "P/FCF": "P/FCF",
-                "Dividend Yield %": "Div Yield",
-                "ROE": "ROE",
-                "ROIC": "ROIC",
-                "Creacion Valor (Wacc vs Roic)": "Creación Valor",
-                "MarketCap": "Market Cap"
-            }
+            height=400
         )
 
         if errs:
@@ -639,7 +582,7 @@ def main():
         det_raw = df[df["Ticker"] == pick].iloc[0]
 
         st.markdown(f"""
-        <div class="company-card">
+        <div style='background-color: #f8f9fa; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 1.5rem; border: 1px solid #E0E0E0;'>
             <h3>{det_raw['Nombre']}</h3>
             <p><strong>Sector:</strong> <span class="sector-badge">{det_raw['Sector']}</span></p>
             <p><strong>País:</strong> {det_raw['País']} | <strong>Industria:</strong> {det_raw['Industria']}</p>
