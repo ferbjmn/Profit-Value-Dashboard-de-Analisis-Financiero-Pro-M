@@ -215,7 +215,7 @@ def main():
         st.header("⚙️ Configuración")
         t_in = st.text_area("Tickers (separados por comas)", 
                           "HRL, AAPL, MSFT, ABT, O, XOM, KO, JNJ, CLX, CHD, CB, DDOG")
-        max_t = st.slider("Máximo de tickers", 1, 50, 12)
+        max_t = st.slider("Máximo de tickers", 1, 100, 25)
         
         st.markdown("---")
         st.markdown("**Parámetros WACC**")
